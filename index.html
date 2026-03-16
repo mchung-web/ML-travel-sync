@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ML Travel - Ultimate Cloud V12.0</title>
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/2395/2395826.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+            "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js",
+            "firebase/storage": "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js"
+        }
+    }
+    </script>
+
+    <style>
+        :root { --ios-bg: #F2F2F7; }
+        body { background-color: var(--ios-bg); font-family: -apple-system, sans-serif; margin: 0; -webkit-tap-highlight-color: transparent; color: #1c1c1e; }
+        .modern-card { background: white; border-radius: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.04); border: 1px solid rgba(0,0,0,0.02); }
+        .ios-btn:active { opacity: 0.6; transform: scale(0.97); transition: 0.1s; }
+        .safe-top { padding-top: env(safe-area-inset-top); }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        input, select { outline: none; border: none; background: transparent; width: 100%; font-size: 16px !important; }
+        .detail-input { background: #FFFFFF; border-radius: 12px; padding: 12px 14px; font-size: 15px !important; margin-bottom: 8px; border: 1px solid #E5E5EA; }
+        .status-pill { padding: 4px 10px; border-radius: 20px; font-size: 10px; font-weight: bold; display: flex; align-items: center; gap: 4px; }
+        .online { background: #E8F5E9; color: #2E7D32; }
+        .action-sheet { position: fixed; bottom: 0; left: 0; right: 0; z-index: 100; background: #F9F9F9; border-radius: 30px 30px 0 0; padding: 20px 20px calc(20px + env(safe-area-inset-bottom)); transform: translateY(105%); transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 -4px 25px rgba(0,0,0,0.1); }
+        .action-sheet.show { transform: translateY(0); }
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 90; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+        .overlay.show { opacity: 1; pointer-events: auto; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="module">
+        import { initializeApp } from "firebase/app";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc } from "firebase/firestore";
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAdeHKMEkhhpoC1I95cTydyBHnaWqZRzo4",
+            authDomain: "ml-travel-2026.firebaseapp.com",
+            projectId: "ml-travel-2026",
+            storageBucket: "ml-travel-2026.firebasestorage.app",
+            messagingSenderId: "934363438974",
+            appId: "1:934363438974:web:73d3e8060ecc9707c95d2f",
+            measurementId: "G-XBM47HDNX7"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const storage = getStorage(app);
+        window.FB = { db, storage, collection, onSnapshot, doc, setDoc, deleteDoc, updateDoc, ref, uploadBytes, getDownloadURL };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const categoryMeta = {
+            "景點": { icon: "📸", text: "text-blue-600", bg: "bg-blue-50", border: "border-blue-500" },
+            "餐廳": { icon: "🍽️", text: "text-orange-600", bg: "bg-orange-50", border: "border-orange-500" },
+            "交通": { icon: "🚆", text: "text-emerald-600", bg: "bg-emerald-50", border: "border-emerald-500" },
+            "購物": { icon: "🛍️", text: "text-pink-600", bg: "bg-pink-50", border: "border-pink-500" },
+            "住宿": { icon: "🏨", text: "text-indigo-600", bg: "bg-indigo-50", border: "border-indigo-500" },
+            "其他": { icon: "📍", text: "text-gray-600", bg: "bg-gray-50", border: "border-gray-500" }
+        };
+
+        // --- 核心上傳函數 ---
+        const uploadToCloud = async (tripId, folder, file) => {
+            const { storage, ref, uploadBytes, getDownloadURL } = window.FB;
+            const fileName = `${Date.now()}_${file.name}`;
+            const fileRef = ref(storage, `trips/${tripId}/${folder}/${fileName}`);
+            await uploadBytes(fileRef, file);
+            return await getDownloadURL(fileRef);
+        };
+
+        const TripIcon = ({ iconData, sizeClass }) => {
+            if (iconData?.type === 'image') return <img src={iconData.value} className={`${sizeClass} object-cover rounded-2xl shadow-sm`} />;
+            return <div className={`${sizeClass} bg-orange-50 flex items-center justify-center text-3xl shadow-inner rounded-2xl`}>{iconData?.value || '🦒'}</div>;
+        };
+
+        function App() {
+            const [view, setView] = useState('list');
+            const [trips, setTrips] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [activeId, setActiveId] = useState(null);
+            const [rates, setRates] = useState({ HKD:1, JPY:0.051, TWD:0.24, USD:7.8 });
+
+            useEffect(() => {
+                if (!window.FB) return;
+                const unsub = window.FB.onSnapshot(window.FB.collection(window.FB.db, "trips"), (snap) => {
+                    setTrips(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                    setLoading(false);
+                });
+                return () => unsub();
+            }, []);
+
+            useEffect(() => {
+                fetch('https://open.er-api.com/v6/latest/HKD').then(r=>r.json()).then(d => {
+                    if(d.rates) setRates({ HKD:1, JPY:1/d.rates.JPY, TWD:1/d.rates.TWD, USD:1/d.rates.USD, CNY:1/d.rates.CNY, KRW:1/d.rates.KRW, THB:1/d.rates.THB });
+                });
+            }, []);
+
+            const activeTrip = trips.find(t => t.id === activeId);
+            const updateTrip = async (data) => {
+                if (!activeId) return;
+                await window.FB.setDoc(window.FB.doc(window.FB.db, "trips", activeId), data, { merge: true });
+            };
+
+            if (loading) return <div className="h-screen flex items-center justify-center font-black text-gray-400 animate-pulse">ML TRAVEL CLOUD...</div>;
+
+            const props = { trip: activeTrip, updateTrip, setView, rates, trips };
+
+            if (view === 'list') return <ListView {...props} setActiveId={setActiveId} />;
+            if (!activeTrip) return null;
+
+            switch(view) {
+                case 'detail': return <DetailView {...props} />;
+                case 'itinerary': return <ItineraryView {...props} />;
+                case 'expenses': return <ExpensesView {...props} />;
+                case 'bookings': return <BookingsView {...props} />;
+                case 'shopping': return <ShoppingView {...props} />;
+                case 'packing': return <PackingView {...props} />;
+                case 'converter': return <ConverterView {...props} />;
+                default: return <ListView {...props} />;
+            }
+        }
+
+        // --- 子頁面組件 ---
+
+        function ListView({ trips, setView, setActiveId }) {
+            const [modal, setModal] = useState(false);
+            const [newT, setNewT] = useState({ name: "", date: new Date().toISOString().split('T')[0], days: "5" });
+
+            return (
+                <div className="safe-top p-6 min-h-screen">
+                    <div className="flex justify-between items-center mb-8">
+                        <div><h1 className="text-2xl font-black italic">ML Travel</h1><div className="status-pill online w-fit mt-1">● 雲端已連線</div></div>
+                        <button onClick={()=>setModal(true)} className="bg-blue-600 text-white w-10 h-10 rounded-full shadow-lg text-2xl ios-btn">＋</button>
+                    </div>
+                    <div className="space-y-4">
+                        {trips.map(t => (
+                            <div key={t.id} onClick={()=>{setActiveId(t.id); setView('detail');}} className="modern-card p-5 flex items-center justify-between ios-btn">
+                                <div className="flex items-center gap-4">
+                                    <TripIcon iconData={t.icon} sizeClass="w-14 h-14" />
+                                    <div>
+                                        <div className="font-bold text-gray-900">{t.name}</div>
+                                        <div className="text-gray-400 text-xs font-bold uppercase">{t.startDate} · {t.totalDays} Days</div>
+                                    </div>
+                                </div>
+                                <button onClick={(e)=>{e.stopPropagation(); if(confirm("刪除後朋友的手機也會同步消失，確定？")) window.FB.deleteDoc(window.FB.doc(window.FB.db,"trips",t.id))}} className="text-gray-200 p-2">✕</button>
+                            </div>
+                        ))}
+                    </div>
+                    {modal && (
+                        <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-6 backdrop-blur-sm">
+                            <div className="bg-white rounded-[32px] p-6 w-full max-w-sm space-y-4 shadow-2xl">
+                                <h3 className="font-black text-xl text-center">New Journey</h3>
+                                <input className="detail-input font-bold" placeholder="Trip Name" value={newT.name} onChange={e=>setNewT({...newT, name:e.target.value})} />
+                                <div className="flex gap-2">
+                                    <input type="date" className="detail-input flex-1 font-bold" value={newT.date} onChange={e=>setNewT({...newT, date:e.target.value})} />
+                                    <input type="number" className="detail-input w-20 font-bold" value={newT.days} onChange={e=>setNewT({...newT, days:e.target.value})} />
+                                </div>
+                                <div className="flex gap-2 pt-2">
+                                    <button onClick={()=>setModal(false)} className="flex-1 py-4 bg-gray-100 rounded-2xl font-bold text-gray-400">Cancel</button>
+                                    <button onClick={async ()=>{
+                                        const id = Date.now().toString();
+                                        await window.FB.setDoc(window.FB.doc(window.FB.db, "trips", id), {
+                                            name: newT.name, startDate: newT.date, totalDays: parseInt(newT.days),
+                                            icon: { type:'emoji', value:'🦒' }, itinerary: [], expenses: [], packing: [], bookings: [], shopping: [], dailyPhotos: {}
+                                        });
+                                        setModal(false);
+                                    }} className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg">Start</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function DetailView({ trip, setView }) {
+            return (
+                <div className="safe-top p-6 min-h-screen">
+                    <button onClick={()=>setView('list')} className="text-blue-500 font-bold mb-8 flex items-center">❮ MY TRIPS</button>
+                    <div className="text-center mb-10">
+                        <TripIcon iconData={trip.icon} sizeClass="w-24 h-24 mx-auto mb-4 shadow-lg" />
+                        <h1 className="text-3xl font-black text-gray-900 mb-1">{trip.name}</h1>
+                        <p className="text-gray-400 text-xs font-black uppercase tracking-widest">{trip.startDate} · {trip.totalDays} DAYS</p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3">
+                        <FeatureBtn icon="📅" title="Schedule" color="bg-blue-500" onClick={()=>setView('itinerary')} />
+                        <FeatureBtn icon="📎" title="Bookings" color="bg-indigo-500" onClick={()=>setView('bookings')} />
+                        <FeatureBtn icon="🛍️" title="Shopping" color="bg-pink-500" onClick={()=>setView('shopping')} />
+                        <FeatureBtn icon="💰" title="Expenses" color="bg-orange-500" onClick={()=>setView('expenses')} />
+                        <FeatureBtn icon="💱" title="Exchange" color="bg-teal-500" onClick={()=>setView('converter')} />
+                        <FeatureBtn icon="🧳" title="Packing" color="bg-emerald-500" onClick={()=>setView('packing')} />
+                    </div>
+                </div>
+            );
+        }
+
+        const FeatureBtn = ({ icon, title, color, onClick }) => (
+            <button onClick={onClick} className="modern-card p-5 flex items-center gap-4 ios-btn">
+                <div className={`${color} w-11 h-11 rounded-2xl flex items-center justify-center text-xl text-white shadow-sm`}>{icon}</div>
+                <div className="font-black text-gray-700 text-lg italic uppercase">{title}</div><div className="ml-auto text-gray-300">❯</div>
+            </button>
+        );
+
+        function ItineraryView({ trip, updateTrip, setView }) {
+            const [day, setDay] = useState(1);
+            const [form, setForm] = useState({ title: "", time: "09:00", category: "景點", note: "", address: "" });
+            const [up, setUp] = useState(false);
+            const photos = (trip.dailyPhotos || {})[day] || [];
+            const list = (trip.itinerary || []).filter(i => i.day === day).sort((a,b)=>a.time.localeCompare(b.time));
+
+            return (
+                <div className="safe-top min-h-screen bg-white pb-24">
+                    <div className="px-6 py-4 border-b flex justify-between items-center sticky top-0 bg-white/90 backdrop-blur-md z-40">
+                        <button onClick={()=>setView('detail')} className="text-blue-500 font-bold">❮</button>
+                        <h2 className="font-black text-xl italic text-blue-600 tracking-tighter">DAY {day}</h2><div className="w-8"></div>
+                    </div>
+                    <div className="flex gap-2 p-4 overflow-x-auto no-scrollbar bg-gray-50 border-b">
+                        {Array.from({length: trip.totalDays}, (_, i) => i + 1).map(d => (
+                            <button key={d} onClick={()=>setDay(d)} className={`flex-shrink-0 w-12 h-12 rounded-2xl font-black ${day===d?'bg-blue-600 text-white shadow-lg':'bg-white text-gray-400 border'}`}>D{d}</button>
+                        ))}
+                    </div>
+                    <div className="p-6 space-y-6">
+                        <div className="modern-card p-4">
+                            <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Today's OOTD / Moments</h3>
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar">
+                                {photos.map((p, i) => (
+                                    <div key={i} className="relative flex-shrink-0">
+                                        <img src={p} className="w-20 h-20 object-cover rounded-xl shadow-sm" onClick={()=>window.open(p)} />
+                                        <button onClick={()=>{const n=[...photos]; n.splice(i,1); updateTrip({dailyPhotos:{...trip.dailyPhotos, [day]:n}})}} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs">✕</button>
+                                    </div>
+                                ))}
+                                {up ? <div className="w-20 h-20 bg-gray-100 animate-pulse rounded-xl flex items-center justify-center text-[10px] font-bold">...</div> : (
+                                    <label className="w-20 h-20 border-2 border-dashed border-gray-200 rounded-xl flex items-center justify-center text-gray-300 ios-btn">＋<input type="file" accept="image/*" hidden onChange={async e=>{
+                                        if(!e.target.files[0]) return; setUp(true);
+                                        const url = await uploadToCloud(trip.id, `photos/day${day}`, e.target.files[0]);
+                                        updateTrip({dailyPhotos:{...trip.dailyPhotos, [day]:[...photos, url]}}); setUp(false);
+                                    }} /></label>
+                                )}
+                            </div>
+                        </div>
+                        <div className="space-y-4">
+                            {list.map(i => {
+                                const meta = categoryMeta[i.category] || categoryMeta["其他"];
+                                return (
+                                    <div key={i.id} className={`modern-card p-4 border-l-4 ${meta.border} shadow-sm relative`}>
+                                        <div className="flex justify-between items-start mb-1">
+                                            <span className={`${meta.text} text-[10px] font-black uppercase`}>{meta.icon} {i.category} · {i.time}</span>
+                                            <button onClick={()=>updateTrip({itinerary: trip.itinerary.filter(x=>x.id!==i.id)})} className="text-gray-200">✕</button>
+                                        </div>
+                                        <div className="font-black text-lg text-gray-800 leading-tight mb-1">{i.title}</div>
+                                        {i.note && <div className="text-xs text-gray-400 italic">" {i.note} "</div>}
+                                        {i.address && <button onClick={()=>window.open(`http://maps.apple.com/?q=${encodeURIComponent(i.address)}`)} className={`${meta.bg} ${meta.text} px-3 py-1.5 rounded-lg text-[10px] font-black mt-2 inline-block`}>📍 OPEN MAP</button>}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div className="bg-gray-100 p-5 rounded-[28px] space-y-3">
+                            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                                {Object.keys(categoryMeta).map(cat => (
+                                    <button key={cat} onClick={()=>setForm({...form, category: cat})} className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold ${form.category === cat ? categoryMeta[cat].bg + ' ' + categoryMeta[cat].text : 'bg-white text-gray-400'}`}>{cat}</button>
+                                ))}
+                            </div>
+                            <input className="detail-input font-bold" placeholder="Spot / Activity" value={form.title} onChange={e=>setForm({...form, title:e.target.value})} />
+                            <div className="flex gap-2">
+                                <input type="time" className="detail-input flex-1 font-bold" value={form.time} onChange={e=>setForm({...form, time:e.target.value})} />
+                                <input className="detail-input flex-[2] font-bold" placeholder="Address (Optional)" value={form.address} onChange={e=>setForm({...form, address:e.target.value})} />
+                            </div>
+                            <input className="detail-input" placeholder="Notes..." value={form.note} onChange={e=>setForm({...form, note:e.target.value})} />
+                            <button onClick={()=>{
+                                if(!form.title) return;
+                                updateTrip({itinerary: [...(trip.itinerary||[]), {...form, id:Date.now(), day}]});
+                                setForm({title:"", time:"09:00", category:"景點", note:"", address:""});
+                            }} className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black shadow-lg">＋ ADD TO DAY {day}</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ExpensesView({ trip, updateTrip, setView, rates }) {
+            const [form, setForm] = useState({ title: "", amount: "", curr: "HKD", cat: "餐飲" });
+            const cats = [{n:"餐飲",i:"🍜"},{n:"交通",i:"🚕"},{n:"住宿",i:"🏨"},{n:"購物",i:"🛍️"},{n:"門票",i:"🎟️"},{n:"其他",i:"💰"}];
+            const total = (trip.expenses || []).reduce((s, e) => s + (parseFloat(e.amount) * (rates[e.curr] || 1)), 0);
+
+            return (
+                <div className="safe-top min-h-screen bg-white">
+                    <div className="px-6 py-4 border-b flex justify-between items-center sticky top-0 bg-white z-50">
+                        <button onClick={()=>setView('detail')} className="text-orange-500 font-bold">❮</button>
+                        <h2 className="font-black text-xl italic text-orange-600">EXPENSES</h2><div className="w-8"></div>
+                    </div>
+                    <div className="p-6">
+                        <div className="bg-gray-900 p-8 rounded-[36px] text-white shadow-xl mb-8 relative overflow-hidden italic">
+                            <div className="text-[10px] opacity-40 font-black uppercase tracking-widest mb-1">Estimated Total (HKD)</div>
+                            <div className="text-4xl font-black">$ {total.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+                            <div className="absolute right-[-10px] bottom-[-10px] opacity-10 text-9xl">💰</div>
+                        </div>
+                        <div className="bg-gray-100 p-5 rounded-[28px] space-y-3 mb-8">
+                            <div className="flex gap-2">
+                                <select className="bg-white px-3 rounded-xl font-bold h-11 flex-1 text-xs" value={form.curr} onChange={e=>setForm({...form, curr:e.target.value})}>
+                                    {Object.keys(rates).filter(k=>k!=='updateTime').map(c=><option key={c}>{c}</option>)}
+                                </select>
+                                <select className="bg-white px-3 rounded-xl font-bold h-11 flex-1 text-xs" value={form.cat} onChange={e=>setForm({...form, cat:e.target.value})}>
+                                    {cats.map(c=><option key={c.n} value={c.n}>{c.i} {c.n}</option>)}
+                                </select>
+                            </div>
+                            <input className="detail-input font-bold" placeholder="What did you buy?" value={form.title} onChange={e=>setForm({...form, title:e.target.value})} />
+                            <input type="number" className="detail-input font-black text-orange-600" placeholder="Amount" value={form.amount} onChange={e=>setForm({...form, amount:e.target.value})} />
+                            <button onClick={()=>{
+                                if(!form.title || !form.amount) return;
+                                updateTrip({expenses: [...(trip.expenses||[]), {...form, id:Date.now()}]});
+                                setForm({...form, title:"", amount:""});
+                            }} className="w-full bg-orange-500 text-white py-4 rounded-2xl font-black shadow-lg">＋ RECORD</button>
+                        </div>
+                        <div className="space-y-3">
+                            {(trip.expenses || []).slice().reverse().map(i => (
+                                <div key={i.id} className="modern-card p-4 flex justify-between items-center">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center text-lg">{cats.find(c=>c.n===i.cat)?.i || '💰'}</div>
+                                        <div><div className="font-bold text-sm">{i.title}</div><div className="text-[10px] text-gray-400 font-black">{i.curr} {i.amount}</div></div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="font-black text-orange-600">$ {(i.amount * (rates[i.curr]||1)).toFixed(0)}</div>
+                                        <button onClick={()=>updateTrip({expenses: trip.expenses.filter(x=>x.id!==i.id)})} className="text-gray-200 p-2">✕</button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function BookingsView({ trip, updateTrip, setView }) {
+            const [form, setForm] = useState({ title: "" });
+            const [file, setFile] = useState(null);
+            const [up, setUp] = useState(false);
+
+            const add = async () => {
+                if(!form.title || !file) return; setUp(true);
+                const url = await uploadToCloud(trip.id, 'bookings', file);
+                const type = file.type.includes('pdf') ? 'pdf' : 'image';
+                updateTrip({bookings: [...(trip.bookings||[]), {id:Date.now(), title:form.title, url, type}]});
+                setForm({title:""}); setFile(null); setUp(false);
+            };
+
+            return (
+                <div className="safe-top min-h-screen bg-white">
+                    <div className="px-6 py-4 border-b flex justify-between items-center sticky top-0 bg-white">
+                        <button onClick={()=>setView('detail')} className="text-indigo-500 font-bold">❮</button>
+                        <h2 className="font-black text-xl italic text-indigo-600">BOOKINGS</h2><div className="w-8"></div>
+                    </div>
+                    <div className="p-6 space-y-6">
+                        <div className="bg-gray-100 p-5 rounded-[28px] space-y-3">
+                            <input className="detail-input font-bold" placeholder="Booking Name (e.g. Hotel / Flight)" value={form.title} onChange={e=>setForm({...form, title:e.target.value})} />
+                            <label className="detail-input flex items-center justify-center border-dashed border-2 text-indigo-400 font-bold h-24 overflow-hidden">
+                                {file ? `Selected: ${file.name.slice(0,10)}...` : "＋ Select Image or PDF"}
+                                <input type="file" accept="image/*,application/pdf" hidden onChange={e=>setFile(e.target.files[0])} />
+                            </label>
+                            <button onClick={add} disabled={up} className={`w-full py-4 rounded-2xl font-black text-white shadow-lg ${up?'bg-gray-300':'bg-indigo-600'}`}>
+                                {up ? 'UPLOADING...' : '＋ SAVE TO CLOUD'}
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            {(trip.bookings || []).map(b => (
+                                <div key={b.id} className="modern-card p-3 relative" onClick={()=>window.open(b.url)}>
+                                    <button onClick={(e)=>{e.stopPropagation(); updateTrip({bookings: trip.bookings.filter(x=>x.id!==b.id)})}} className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-6 h-6 text-xs z-10">✕</button>
+                                    <div className="bg-gray-50 h-24 rounded-xl flex items-center justify-center mb-2 overflow-hidden">
+                                        {b.type==='pdf' ? <span className="text-4xl">📄</span> : <img src={b.url} className="w-full h-full object-cover" />}
+                                    </div>
+                                    <div className="font-black text-[10px] truncate uppercase">{b.title}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ShoppingView({ trip, updateTrip, setView }) {
+            const [name, setName] = useState("");
+            return (
+                <div className="safe-top min-h-screen bg-white">
+                    <div className="px-6 py-4 border-b flex justify-between items-center sticky top-0 bg-white z-40">
+                        <button onClick={()=>setView('detail')} className="text-pink-500 font-bold">❮</button>
+                        <h2 className="font-black text-xl italic text-pink-600">SHOPPING</h2><div className="w-8"></div>
+                    </div>
+                    <div className="p-6">
+                        <div className="flex gap-2 mb-8">
+                            <input className="detail-input flex-1 m-0 font-bold" placeholder="What to buy?" value={name} onChange={e=>setName(e.target.value)} />
+                            <button onClick={()=>{if(!name) return; updateTrip({shopping: [...(trip.shopping||[]), {id:Date.now(), name, checked:false}]}); setName("");}} className="bg-pink-500 text-white px-6 rounded-xl font-black shadow-lg">ADD</button>
+                        </div>
+                        <div className="space-y-3">
+                            {(trip.shopping || []).map(s => (
+                                <div key={s.id} onClick={()=>updateTrip({shopping: trip.shopping.map(x=>x.id===s.id?{...x, checked:!x.checked}:x)})} className="modern-card p-5 flex items-center gap-4 ios-btn">
+                                    <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${s.checked?'bg-pink-500 border-pink-500':'border-gray-200'}`}>
+                                        {s.checked && <span className="text-white text-[10px]">✓</span>}
+                                    </div>
+                                    <div className={`flex-1 font-black ${s.checked?'text-gray-300 line-through':'text-gray-800'}`}>{s.name}</div>
+                                    <button onClick={(e)=>{e.stopPropagation(); updateTrip({shopping: trip.shopping.filter(x=>x.id!==s.id)})}} className="text-gray-200">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function PackingView({ trip, updateTrip, setView }) {
+            const [form, setForm] = useState({ name: "", qty: "1" });
+            return (
+                <div className="safe-top min-h-screen bg-white">
+                    <div className="px-6 py-4 border-b flex justify-between items-center sticky top-0 bg-white">
+                        <button onClick={()=>setView('detail')} className="text-emerald-500 font-bold">❮</button>
+                        <h2 className="font-black text-xl italic text-emerald-600">PACKING</h2><div className="w-8"></div>
+                    </div>
+                    <div className="p-6">
+                        <div className="bg-emerald-50 p-5 rounded-[28px] mb-8 space-y-3 border border-emerald-100">
+                            <input className="detail-input font-bold" placeholder="Item Name" value={form.name} onChange={e=>setForm({...form, name:e.target.value})} />
+                            <div className="flex gap-2">
+                                <input type="number" className="detail-input flex-1 font-bold" placeholder="Qty" value={form.qty} onChange={e=>setForm({...form, qty:e.target.value})} />
+                                <button onClick={()=>{if(!form.name) return; updateTrip({packing:[...(trip.packing||[]), {...form, id:Date.now(), checked:false}]}); setForm({name:"", qty:"1"});}} className="bg-emerald-600 text-white px-8 rounded-xl font-black shadow-lg">ADD</button>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3">
+                            {(trip.packing || []).map(p => (
+                                <div key={p.id} onClick={()=>updateTrip({packing: trip.packing.map(x=>x.id===p.id?{...x, checked:!x.checked}:x)})} className="modern-card p-5 flex items-center gap-4">
+                                    <div className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center ${p.checked?'bg-emerald-500 border-emerald-500':'border-gray-200'}`}>
+                                        {p.checked && <span className="text-white text-[10px]">✓</span>}
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className={`font-black ${p.checked?'text-gray-300 line-through':'text-gray-800'}`}>{p.name}</div>
+                                        <div className="text-[10px] font-black text-emerald-600 italic">QTY: {p.qty}</div>
+                                    </div>
+                                    <button onClick={(e)=>{e.stopPropagation(); updateTrip({packing: trip.packing.filter(x=>x.id!==p.id)})}} className="text-gray-200">✕</button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function ConverterView({ setView, rates }) {
+            const [amt, setAmt] = useState(1000);
+            const [base, setBase] = useState('JPY');
+            const [target, setTarget] = useState('HKD');
+            const currs = Object.keys(rates).filter(k=>k!=='updateTime');
+
+            return (
+                <div className="safe-top min-h-screen bg-gray-50">
+                    <div className="px-6 py-4 border-b flex justify-between items-center bg-white">
+                        <button onClick={()=>setView('detail')} className="text-teal-500 font-bold">❮</button>
+                        <h2 className="font-black text-xl italic text-teal-600">EXCHANGE</h2><div className="w-8"></div>
+                    </div>
+                    <div className="p-6 space-y-4">
+                        <div className="bg-teal-600 p-8 rounded-[36px] text-white shadow-xl italic">
+                            <select className="text-xs font-black mb-2 bg-teal-700 px-3 py-1 rounded-lg uppercase" value={base} onChange={e=>setBase(e.target.value)}>{currs.map(c=><option key={c}>{c}</option>)}</select>
+                            <input type="number" className="text-5xl font-black w-full" value={amt} onChange={e=>setAmt(e.target.value)} />
+                        </div>
+                        <div className="flex justify-center text-gray-300 text-2xl">⬇</div>
+                        <div className="bg-white p-8 rounded-[36px] border shadow-sm italic">
+                            <select className="text-xs font-black mb-2 bg-gray-100 px-3 py-1 rounded-lg uppercase" value={target} onChange={e=>setTarget(e.target.value)}>{currs.map(c=><option key={c}>{c}</option>)}</select>
+                            <div className="text-5xl font-black text-gray-800">{(amt * rates[base] / rates[target]).toLocaleString(undefined,{maximumFractionDigits:2})}</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
