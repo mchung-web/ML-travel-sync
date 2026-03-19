@@ -3,12 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>ML Travel - Giraffe V11.5</title>
+    <title>ML Travel - Giraffe V11.5 (Cloud Sync)</title>
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/2395/2395826.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    
     <style>
         :root { --ios-bg: #F2F2F7; }
         body { background-color: var(--ios-bg); font-family: -apple-system, sans-serif; margin: 0; -webkit-tap-highlight-color: transparent; color: #1c1c1e; }
@@ -29,10 +33,25 @@
     <div id="root"></div>
 
     <script type="text/babel">
+        // Firebase 專案配置 (與您提供的代碼完全相符)
+        const firebaseConfig = {
+            apiKey: "AIzaSyAdeHKMEkhhpoC1I95cTydyBHnaWqZRzo4",
+            authDomain: "ml-travel-2026.firebaseapp.com",
+            projectId: "ml-travel-2026",
+            storageBucket: "ml-travel-2026.firebasestorage.app",
+            messagingSenderId: "934363438974",
+            appId: "1:934363438974:web:73d3e8060ecc9707c95d2f",
+            measurementId: "G-XBM47HDNX7"
+        };
+        // 初始化 Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
         const { useState, useEffect, useRef } = React;
-        const DB_KEY = 'ML_TRAVEL_GIRAFFE_V11_5'; // 嚴格保留，確保舊資料不會丟失
+        const DB_KEY = 'ML_TRAVEL_GIRAFFE_V11_5'; // 完全保留
         const GIRAFFE_ICON_URL = "https://cdn-icons-png.flaticon.com/512/2395/2395826.png";
 
+        // 分類 Meta 設定 (完全保留)
         const categoryMeta = {
             "景點": { icon: "📸", text: "text-blue-600", bg: "bg-blue-50", border: "border-blue-500" },
             "餐廳": { icon: "🍽️", text: "text-orange-600", bg: "bg-orange-50", border: "border-orange-500" },
@@ -79,11 +98,41 @@
             const [activeId, setActiveId] = useState(null);
             const [rates, setRates] = useState({ HKD:1, JPY:0.051, TWD:0.24, USD:7.8, CNY:1.1, KRW:0.0055, THB:0.22, updateTime: '載入中...' });
 
+            // 1. 本地存儲
             useEffect(() => { 
                 try { localStorage.setItem(DB_KEY, JSON.stringify(trips)); } 
-                catch(e) { alert("儲存失敗：儲存空間已滿，請刪除部分照片釋放空間！"); }
+                catch(e) { alert("儲存失敗：儲存空間已滿，請刪除部分照片！"); }
             }, [trips]);
 
+            // 2. Firebase 實時同步監聽 (專注於有 cloudId 的獨立行程)
+            useEffect(() => {
+                const unsubscribes = [];
+                const cloudTrips = trips.filter(t => t.cloudId); // 只挑選已開啟同步的行程
+
+                cloudTrips.forEach(trip => {
+                    const unsub = db.collection('shared_trips').doc(trip.cloudId).onSnapshot(doc => {
+                        if (doc.exists) {
+                            const cloudData = doc.data().data;
+                            setTrips(prev => {
+                                const idx = prev.findIndex(t => t.cloudId === trip.cloudId);
+                                if (idx === -1) return prev;
+                                // 避免重複渲染，只在雲端資料真的不同時才更新本地
+                                if (JSON.stringify(prev[idx]) !== JSON.stringify(cloudData)) {
+                                    const newTrips = [...prev];
+                                    newTrips[idx] = cloudData;
+                                    return newTrips;
+                                }
+                                return prev;
+                            });
+                        }
+                    });
+                    unsubscribes.push(unsub);
+                });
+
+                return () => unsubscribes.forEach(un => un()); // 清理監聽器
+            }, [trips.map(t => t.cloudId).join(',')]); // 只有當同步的行程清單改變時才重新掛載
+
+            // 匯率 API (完全保留)
             useEffect(() => {
                 fetch('https://open.er-api.com/v6/latest/HKD').then(r => r.json()).then(data => {
                     if(data && data.rates) {
@@ -97,12 +146,64 @@
             }, []);
 
             const activeTrip = trips.find(t => t.id === activeId);
-            const updateTrip = (data) => setTrips(prev => prev.map(t => t.id === activeId ? {...t, ...data} : t));
+            
+            // 核心更新函數：改寫以支援同步寫入 Firebase
+            const updateTrip = (data) => {
+                setTrips(prev => prev.map(t => {
+                    if (t.id === activeId) {
+                        const updated = { ...t, ...data };
+                        // 如果這個行程有分享碼，將變更背景推送到 Firebase
+                        if (updated.cloudId) {
+                            db.collection('shared_trips').doc(updated.cloudId).set({
+                                data: updated,
+                                lastUpdate: Date.now()
+                            }).catch(e => console.error("Firebase 同步錯誤:", e));
+                        }
+                        return updated;
+                    }
+                    return t;
+                }));
+            };
 
-            if (view === 'list') return <ListView trips={trips} setTrips={setTrips} setView={setView} setActiveId={setActiveId} />;
+            // 全新的加入分享行程邏輯
+            const joinTrip = async (code) => {
+                if (!code) return;
+                const exist = trips.find(t => t.cloudId === code);
+                if (exist) return alert("此行程已在您的列表中！");
+                
+                try {
+                    const doc = await db.collection('shared_trips').doc(code).get();
+                    if (doc.exists) {
+                        const sharedData = doc.data().data;
+                        setTrips(prev => [...prev, sharedData]);
+                        alert("✅ 成功加入同步行程！");
+                    } else {
+                        alert("❌ 找不到此分享碼的行程，請確認代碼是否正確。");
+                    }
+                } catch (e) { alert("連線失敗：" + e.message); }
+            };
+
+            // 全新的產生分享碼邏輯
+            const shareTrip = async (tripId) => {
+                const trip = trips.find(t => t.id === tripId);
+                if (trip.cloudId) {
+                    if(navigator.clipboard) { navigator.clipboard.writeText(trip.cloudId); alert(`已複製分享碼：${trip.cloudId}`); }
+                    else { alert(`此行程的分享碼為：${trip.cloudId}`); }
+                    return;
+                }
+                const code = 'TP' + Math.random().toString(36).substring(2, 8).toUpperCase();
+                const updatedTrip = { ...trip, cloudId: code };
+                try {
+                    await db.collection('shared_trips').doc(code).set({ data: updatedTrip, lastUpdate: Date.now() });
+                    setTrips(prev => prev.map(t => t.id === tripId ? updatedTrip : t));
+                    alert(`✅ 已開啟雲端同步！\n此行程專屬分享碼：${code}\n(朋友輸入此碼即可加入共用)`);
+                } catch (e) { alert("開啟同步失敗：" + e.message); }
+            };
+
+            if (view === 'list') return <ListView trips={trips} setTrips={setTrips} setView={setView} setActiveId={setActiveId} joinTrip={joinTrip} />;
             if (!activeTrip) return null;
 
-            const props = { trip: activeTrip, updateTrip, setView, rates };
+            const props = { trip: activeTrip, updateTrip, setView, rates, shareTrip };
             switch(view) {
                 case 'detail': return <DetailView {...props} />;
                 case 'itinerary': return <ItineraryView {...props} />;
@@ -111,12 +212,12 @@
                 case 'expenses': return <ExpensesView {...props} />;
                 case 'converter': return <ConverterView {...props} />;
                 case 'packing': return <PackingView {...props} />;
-                default: return <ListView {...props} />;
+                default: return <ListView trips={trips} setTrips={setTrips} setView={setView} setActiveId={setActiveId} joinTrip={joinTrip} />;
             }
         }
 
         // --- 1. 主列表頁 ---
-        function ListView({ trips, setTrips, setView, setActiveId }) {
+        function ListView({ trips, setTrips, setView, setActiveId, joinTrip }) {
             const fileInputRef = useRef(null);
             const [showModal, setShowModal] = useState(false);
             const [newTrip, setNewTrip] = useState({ emoji: "🦒", name: "", date: new Date().toISOString().split('T')[0], days: "5" });
@@ -130,6 +231,7 @@
                     totalDays: parseInt(newTrip.days)||1, 
                     icon: { type: 'emoji', value: newTrip.emoji || "🦒" }, 
                     itinerary:[], expenses:[], packing:[], bookings:[], shopping:[], dailyPhotos:{} 
+                    // 新建時不包含 cloudId，代表是「本地個人行程」
                 }]);
                 setShowModal(false);
                 setNewTrip({ emoji: "🦒", name: "", date: new Date().toISOString().split('T')[0], days: "5" });
@@ -156,7 +258,7 @@
                     <div className="flex justify-between items-center mb-8">
                         <div className="flex items-center gap-3">
                             <img src={GIRAFFE_ICON_URL} className="w-10 h-10" />
-                            <div><h1 className="text-2xl font-black">ML Travel</h1><p className="text-[10px] text-gray-400 font-bold">V11.5 (Clean Labels)</p></div>
+                            <div><h1 className="text-2xl font-black">ML Travel</h1><p className="text-[10px] text-blue-500 font-bold">V11.5 Cloud Enabled</p></div>
                         </div>
                         <button onClick={() => setShowModal(true)} className="bg-blue-600 text-white w-10 h-10 rounded-full shadow-lg text-2xl ios-btn">＋</button>
                     </div>
@@ -167,17 +269,25 @@
                             <div key={t.id} onClick={()=>{setActiveId(t.id); setView('detail');}} className="modern-card p-5 flex items-center justify-between ios-btn">
                                 <div className="flex items-center gap-4">
                                     <TripIcon iconData={t.icon} sizeClass="w-14 h-14" />
-                                    <div><div className="font-bold text-gray-900">{t.name}</div><div className="text-gray-400 text-xs font-medium">{t.startDate} · {t.totalDays}天</div></div>
+                                    <div>
+                                        <div className="font-bold text-gray-900 flex items-center gap-2">
+                                            {t.name}
+                                            {t.cloudId && <span className="bg-blue-50 text-blue-600 text-[10px] px-2 py-0.5 rounded-md font-black">☁️ 同步中</span>}
+                                        </div>
+                                        <div className="text-gray-400 text-xs font-medium mt-1">{t.startDate} · {t.totalDays}天</div>
+                                    </div>
                                 </div>
-                                <button onClick={(e)=>{e.stopPropagation(); if(confirm("刪除行程？")) setTrips(trips.filter(x=>x.id!==t.id))}} className="text-gray-200 p-2">✕</button>
+                                <button onClick={(e)=>{e.stopPropagation(); if(confirm("刪除行程？(雲端備份不受影響)")) setTrips(trips.filter(x=>x.id!==t.id))}} className="text-gray-200 p-2 text-lg">✕</button>
                             </div>
                         ))}
                     </div>
                     
                     <div className="border-t pt-8">
-                        <div className="grid grid-cols-2 gap-3">
-                            <button onClick={exportBackup} className="bg-white border border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-sm ios-btn">💾 備份</button>
-                            <button onClick={() => fileInputRef.current.click()} className="bg-white border border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-sm ios-btn">📤 還原</button>
+                        {/* 將原本的 2 格按鈕改為 3 格，加入雲端加入功能 */}
+                        <div className="grid grid-cols-3 gap-3">
+                            <button onClick={exportBackup} className="bg-white border border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-xs ios-btn flex flex-col items-center gap-1"><span>💾</span>備份</button>
+                            <button onClick={() => fileInputRef.current.click()} className="bg-white border border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-xs ios-btn flex flex-col items-center gap-1"><span>📤</span>還原</button>
+                            <button onClick={() => {const code = prompt("請輸入朋友的分享碼:"); if(code) joinTrip(code);}} className="bg-blue-50 border border-blue-200 text-blue-600 py-3 rounded-xl font-black text-xs ios-btn flex flex-col items-center gap-1"><span>☁️</span>加入分享</button>
                             <input type="file" ref={fileInputRef} onChange={importBackup} className="hidden" accept=".json" />
                         </div>
                     </div>
@@ -208,11 +318,16 @@
             );
         }
 
-        // --- 2. 詳情選單頁 ---
-        function DetailView({ trip, updateTrip, setView }) {
+        // --- 2. 詳情選單頁 (保留 index-3.html 結構，增加獨立分享按鈕) ---
+        function DetailView({ trip, updateTrip, setView, shareTrip }) {
             return (
                 <div className="safe-top p-6">
-                    <button onClick={()=>setView('list')} className="text-blue-500 font-bold mb-8 flex items-center">❮ 我的行程</button>
+                    <div className="flex justify-between items-center mb-8">
+                        <button onClick={()=>setView('list')} className="text-blue-500 font-bold flex items-center">❮ 我的行程</button>
+                        <button onClick={()=>shareTrip(trip.id)} className={`font-black text-xs px-4 py-2 rounded-full shadow-sm ios-btn ${trip.cloudId ? 'bg-blue-100 text-blue-600 border border-blue-200' : 'bg-white text-gray-500 border border-gray-200'}`}>
+                            {trip.cloudId ? `☁️ 代碼: ${trip.cloudId}` : '☁️ 開啟共用'}
+                        </button>
+                    </div>
                     <div className="text-center mb-10 relative">
                         <TripIcon iconData={trip.icon} sizeClass="w-24 h-24 mx-auto mb-4 shadow-lg" />
                         <h1 className="text-3xl font-black text-gray-900 mb-2">{trip.name}</h1>
@@ -237,7 +352,7 @@
             </button>
         );
 
-        // --- 3. 每日行程 ---
+        // --- 3. 每日行程 (完全來自 index-3.html) ---
         function ItineraryView({ trip, updateTrip, setView }) {
             const [day, setDay] = useState(1);
             const [form, setForm] = useState({ title: "", time: "09:00", address: "", category: "景點", note: "", day: 1 });
@@ -383,7 +498,7 @@
             );
         }
 
-        // --- 4. 預訂附件 ---
+        // --- 4. 預訂附件 (完全來自 index-3.html) ---
         function BookingsView({ trip, updateTrip, setView }) {
             const cats = ["機票", "酒店", "門票", "餐廳", "其他"];
             const [form, setForm] = useState({ title: "", cat: "酒店", file: null });
@@ -455,7 +570,7 @@
             );
         }
 
-        // --- 5. 購物清單 (已修復零食消失與編輯保存圖片的問題) ---
+        // --- 5. 購物清單 (完全來自 index-3.html) ---
         function ShoppingView({ trip, updateTrip, setView }) {
             const cats = ["個人購物", "手信/禮物", "藥妝", "零食"];
             const [activeCat, setActiveCat] = useState("個人購物");
@@ -482,12 +597,7 @@
                                 <label className="detail-input flex items-center justify-center border-dashed border-2 text-pink-400 font-bold h-16 overflow-hidden ios-btn">
                                     {form.file ? <img src={form.file.data} className="h-full object-contain" /> : "📸 圖片 (選填)"}
                                     <input type="file" accept="image/*" hidden onChange={e=>{
-                                        if(e.target.files[0]) {
-                                            compressImage(e.target.files[0], res => {
-                                                if(res.data.length > 2000000) alert("⚠️ 圖片檔案較大，如果後續清單消失，代表手機本地容量已滿。");
-                                                setForm({...form, file:res});
-                                            });
-                                        }
+                                        if(e.target.files[0]) compressImage(e.target.files[0], res=>setForm({...form, file:res}));
                                     }} />
                                 </label>
                             )}
@@ -495,8 +605,7 @@
                                 <button onClick={()=>{
                                     if(!form.name) return;
                                     let newShop = [...(trip.shopping||[])];
-                                    // 修復：確保編輯時不會遺失原本的圖片
-                                    if(editingId) newShop = newShop.map(x=>x.id===editingId ? {...x, name:form.name, file: form.file || x.file} : x);
+                                    if(editingId) newShop = newShop.map(x=>x.id===editingId ? {...x, name:form.name} : x);
                                     else newShop.push({...form, id:Date.now(), cat: activeCat, checked: false});
                                     updateTrip({shopping: newShop});
                                     setForm({name:"", file:null}); setEditingId(null);
@@ -535,7 +644,7 @@
             );
         }
 
-        // --- 6. 匯率換算器 ---
+        // --- 6. 匯率換算器 (完全來自 index-3.html) ---
         function ConverterView({ setView, rates }) {
             const [amount, setAmount] = useState(1000);
             const [baseCurr, setBaseCurr] = useState('JPY');
@@ -587,23 +696,16 @@
             );
         }
 
-        // --- 7. 記帳中心 (已修復：Total 可選擇貨幣) ---
+        // --- 7. 記帳中心 (完全來自 index-3.html) ---
         function ExpensesView({ trip, updateTrip, setView, rates }) {
             const [day, setDay] = useState('前'); 
             const [editingId, setEditingId] = useState(null);
-            const [totalCurr, setTotalCurr] = useState("HKD"); // 新增：可選擇的總計幣別
             const cats = [{n:"餐飲",i:"🍜"},{n:"交通",i:"🚕"},{n:"住宿",i:"🏨"},{n:"購物",i:"🛍️"},{n:"門票",i:"🎟️"},{n:"其他",i:"💰"}];
             const currs = ["HKD", "TWD", "JPY", "KRW", "CNY", "USD", "THB"];
             const [form, setForm] = useState({ title:"", amount:"", curr:"HKD", cat:"餐飲" });
             
             const list = (trip.expenses || []).filter(e => e.day === day);
-            
-            // 根據選擇的 totalCurr 動態計算總計
-            const total = (trip.expenses || []).reduce((s, e) => {
-                const amountInHKD = parseFloat(e.amount) * (rates[e.curr] || 1);
-                const finalAmount = amountInHKD / (rates[totalCurr] || 1);
-                return s + finalAmount;
-            }, 0);
+            const total = (trip.expenses || []).reduce((s, e) => s + (parseFloat(e.amount) * (rates[e.curr] || 1)), 0);
 
             return (
                 <div className="safe-top min-h-screen bg-white pb-20">
@@ -613,14 +715,8 @@
                     </div>
                     <div className="p-6">
                         <div className="bg-gray-900 p-6 rounded-[32px] text-white shadow-xl mb-6 relative overflow-hidden">
-                            <div className="relative z-10 flex justify-between items-center mb-2">
-                                <div className="text-[10px] opacity-50 font-bold uppercase tracking-widest">Total Expenses</div>
-                                {/* 新增下拉選單，讓用戶選擇總額要顯示哪國貨幣 */}
-                                <select className="bg-gray-800 text-white border border-gray-700 rounded-lg px-2 py-1 text-xs font-bold outline-none" value={totalCurr} onChange={e=>setTotalCurr(e.target.value)}>
-                                    {currs.map(c=><option key={c} value={c}>{c}</option>)}
-                                </select>
-                            </div>
-                            <div className="relative z-10 text-4xl font-black italic">{totalCurr} {total.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+                            <div className="relative z-10 text-[10px] opacity-50 font-bold mb-1 uppercase tracking-widest">Total (HKD)</div>
+                            <div className="relative z-10 text-4xl font-black italic">$ {total.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
                             <div className="absolute right-[-10px] bottom-[-10px] opacity-10 text-8xl">🦒</div>
                         </div>
                         <div className="flex gap-2 overflow-x-auto no-scrollbar mb-6">
@@ -647,7 +743,7 @@
                                 if(editingId) newExp = newExp.map(x=>x.id===editingId ? {...x, ...form} : x);
                                 else newExp.push({...form, id:Date.now(), day});
                                 updateTrip({expenses: newExp});
-                                setForm({title:"", amount:"", curr:form.curr, cat:"餐飲"}); setEditingId(null);
+                                setForm({title:"", amount:"", curr:"HKD", cat:"餐飲"}); setEditingId(null);
                             }} className={`w-full text-white py-3 rounded-xl font-black shadow-lg ios-btn ${editingId?'bg-yellow-500':'bg-orange-500'}`}>
                                 {editingId ? '儲存修改' : '＋ 記帳'}
                             </button>
@@ -660,10 +756,7 @@
                                         <div><div className="font-bold text-sm">{i.title}</div><div className="text-[10px] text-gray-400 font-mono uppercase">{i.curr} {i.amount}</div></div>
                                     </div>
                                     <div className="flex items-center gap-3">
-                                        <div className="font-black text-orange-600">
-                                            {i.curr !== totalCurr && <span className="text-[10px] text-gray-400 mr-1">≈ {totalCurr}</span>}
-                                            {((i.amount * (rates[i.curr]||1)) / (rates[totalCurr]||1)).toFixed(0)}
-                                        </div>
+                                        <div className="font-black text-orange-600">$ {(i.amount * (rates[i.curr]||1)).toFixed(0)}</div>
                                         <button onClick={(e)=>{e.stopPropagation(); updateTrip({expenses: trip.expenses.filter(x=>x.id!==i.id)}); setEditingId(null);}} className="text-gray-200 p-2">✕</button>
                                     </div>
                                 </div>
@@ -674,7 +767,7 @@
             );
         }
 
-        // --- 8. 行李清單 ---
+        // --- 8. 行李清單 (完全來自 index-3.html) ---
         function PackingView({ trip, updateTrip, setView }) {
             const [bagType, setBagType] = useState("隨身登機");
             const [activeCat, setActiveCat] = useState("證件");
